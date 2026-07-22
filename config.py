@@ -35,10 +35,23 @@ class Settings:
 
     # Paths
     database_path: str
+    database_url: str
+
     model_path: str
+
 
     # API
     groq_api_key: str
+
+    # Calibration
+    calibration_dir: str
+    desk_file: str
+
+    # Drawing
+    polygon_color: tuple[int, int, int]
+    polygon_thickness: int
+    text_color: tuple[int, int, int]
+    point_radius: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -69,18 +82,40 @@ class Settings:
                 "LOG_LEVEL",
                 "INFO",
             ).upper(),
+
             database_path=os.getenv(
                 "DATABASE_PATH",
                 "database/proctoring.db",
             ),
+            
+            database_url=os.getenv(
+                "DATABASE_URL",
+                "postgresql+psycopg://postgres:password@localhost:5432/proctoring_db",
+            ),
             model_path=os.getenv(
                 "MODEL_PATH",
-                "models/yolov8m-pose.pt",
+                "models/yolo11l-pose.pt",
             ),
             groq_api_key=os.getenv(
                 "GROQ_API_KEY",
                 "",
             ),
+
+            # Calibration
+            calibration_dir=os.getenv(
+                "CALIBRATION_DIR",
+                "calibration",
+            ),
+            desk_file=os.getenv(
+                "DESK_FILE",
+                "calibration/desks.json",
+            ),
+
+            # Drawing
+            polygon_color=(0, 255, 255),
+            polygon_thickness=2,
+            text_color=(255, 255, 255),
+            point_radius=5,
         )
 
         settings.validate()
@@ -117,9 +152,24 @@ class Settings:
                 "DATABASE_PATH cannot be empty."
             )
 
+        if not self.database_url:
+            raise ValueError(
+                "DATABASE_URL cannot be empty."
+            )
+
         if not self.model_path:
             raise ValueError(
                 "MODEL_PATH cannot be empty."
+            )
+
+        if not self.calibration_dir:
+            raise ValueError(
+                "CALIBRATION_DIR cannot be empty."
+            )
+
+        if not self.desk_file:
+            raise ValueError(
+                "DESK_FILE cannot be empty."
             )
 
 

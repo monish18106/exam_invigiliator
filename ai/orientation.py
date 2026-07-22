@@ -1,29 +1,33 @@
 """
 ai/orientation.py
 
-Phase 5 - Head Orientation Estimator
+Phase 5 - Head Orientation Estimation
 
-Responsibilities
-----------------
-- Estimate head orientation using YOLO pose keypoints
-- Classify:
-    FORWARD
-    LEFT
-    RIGHT
-    DOWN
-    UNKNOWN
-- Maintain temporal history for stable predictions
+Uses YOLO11 Pose keypoints to estimate:
 
-Phase:
-    Phase 5
+- FORWARD
+- LEFT
+- RIGHT
+- DOWN
+- UNKNOWN
+
+Input:
+    Detection dictionaries from PoseTracker
+
+Output:
+    Adds:
+        orientation
+        orientation_confidence
+        orientation_score
 """
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict, deque
+from collections import Counter
+from collections import defaultdict
+from collections import deque
 from typing import Any
 
-import cv2
 import numpy as np
 from loguru import logger
 
@@ -31,11 +35,16 @@ from loguru import logger
 class OrientationEstimator:
     """
     Estimate head orientation using YOLO pose keypoints.
-    """
 
-    # -------------------------------------------------
-    # Orientation Labels
-    # -------------------------------------------------
+    Required keypoints:
+        nose
+        left_eye
+        right_eye
+        left_ear
+        right_ear
+        left_shoulder
+        right_shoulder
+    """
 
     FORWARD = "FORWARD"
     LEFT = "LEFT"
@@ -43,46 +52,36 @@ class OrientationEstimator:
     DOWN = "DOWN"
     UNKNOWN = "UNKNOWN"
 
-    # -------------------------------------------------
-
     def __init__(
         self,
         history_size: int = 7,
-        nose_offset_ratio: float = 0.12,
-        down_ratio: float = 0.80,
     ) -> None:
         """
         Parameters
         ----------
         history_size
-            Number of previous predictions to retain.
-
-        nose_offset_ratio
-            Horizontal nose deviation threshold.
-
-        down_ratio
-            Nose vertical threshold relative to shoulders.
+            Number of previous predictions retained for
+            temporal smoothing.
         """
 
-        self.history_size = history_size
-
-        self.nose_offset_ratio = nose_offset_ratio
-
-        self.down_ratio = down_ratio
-
-        # Track history for each student
-        self.history: dict[int, deque[str]] = defaultdict(
-            lambda: deque(maxlen=self.history_size)
+        self.history = defaultdict(
+            lambda: deque(maxlen=history_size)
         )
 
-        logger.success("Orientation Estimator initialized.")
+        logger.success(
+            "Production Orientation Estimator initialized."
+        )
 
-    # -------------------------------------------------
+    # ----------------------------------------------------------
+    # Helper Functions
+    # ----------------------------------------------------------
 
     @staticmethod
-    def _valid(point: tuple[int, int]) -> bool:
+    def valid(
+        point: tuple[int, int] | None,
+    ) -> bool:
         """
-        Returns True if a keypoint appears valid.
+        Check whether a keypoint is valid.
         """
 
         if point is None:
@@ -92,298 +91,465 @@ class OrientationEstimator:
 
         return not (x == 0 and y == 0)
 
-    # -------------------------------------------------
+    # ----------------------------------------------------------
 
     @staticmethod
-    def _distance(
-        p1: tuple[int, int],
-        p2: tuple[int, int],
+    def distance(
+        a: tuple[int, int],
+        b: tuple[int, int],
     ) -> float:
+        """
+        Euclidean distance.
+        """
 
         return float(
             np.linalg.norm(
-                np.array(p1) - np.array(p2)
+                np.array(a) - np.array(b)
             )
         )
 
-    # -------------------------------------------------
+    # ----------------------------------------------------------
 
     @staticmethod
-    def _midpoint(
-        p1: tuple[int, int],
-        p2: tuple[int, int],
+    def midpoint(
+        a: tuple[int, int],
+        b: tuple[int, int],
     ) -> tuple[int, int]:
+        """
+        Midpoint between two points.
+        """
 
         return (
-            int((p1[0] + p2[0]) / 2),
-            int((p1[1] + p2[1]) / 2),
+            int((a[0] + b[0]) / 2),
+            int((a[1] + b[1]) / 2),
         )
 
-    # -------------------------------------------------
+    # ----------------------------------------------------------
 
     @staticmethod
-    def _majority_vote(
-        history: deque[str],
-    ) -> str:
+    def clamp(
+        value: float,
+        minimum: float,
+        maximum: float,
+    ) -> float:
         """
-        Return the most frequent orientation.
+        Clamp value to range.
         """
 
-        if not history:
-            return OrientationEstimator.UNKNOWN
+        return max(
+            minimum,
+            min(value, maximum),
+        )
 
-        counts = Counter(history)
+    # ----------------------------------------------------------
+    # Temporal Smoothing
+    # ----------------------------------------------------------
 
-        return counts.most_common(1)[0][0]
-
-    # -------------------------------------------------
-
-    def _update_history(
+    def smooth(
         self,
         track_id: int,
         orientation: str,
     ) -> str:
         """
-        Update orientation history and return
-        the smoothed prediction.
+        Majority vote over recent predictions.
         """
 
-        self.history[track_id].append(
+        history = self.history[track_id]
+
+        history.append(
             orientation
         )
 
-        return self._majority_vote(
-            self.history[track_id]
-        )
+        counts = Counter(history)
 
-    # -------------------------------------------------
+        return counts.most_common(1)[0][0]
 
-    def reset(
+    # ----------------------------------------------------------
+    # Keypoint Extraction
+    # ----------------------------------------------------------
+
+    def _get_points(
         self,
-        track_id: int,
-    ) -> None:
-        """
-        Remove history for a student.
-        """
+        detection: dict[str, Any],
+    ) -> dict[str, Any]:
 
-        if track_id in self.history:
-            del self.history[track_id]
+        kp = detection["keypoints"]
 
-        # -------------------------------------------------
+        return {
+
+            "nose":
+                kp.get("nose"),
+
+            "left_eye":
+                kp.get("left_eye"),
+
+            "right_eye":
+                kp.get("right_eye"),
+
+            "left_ear":
+                kp.get("left_ear"),
+
+            "right_ear":
+                kp.get("right_ear"),
+
+            "left_shoulder":
+                kp.get("left_shoulder"),
+
+            "right_shoulder":
+                kp.get("right_shoulder"),
+        }
+
+    # ----------------------------------------------------------
+    # Single Detection
+    # ----------------------------------------------------------
 
     def estimate(
         self,
         detection: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Estimate head orientation for a single tracked student.
+        Estimate orientation for one person.
 
-        The detection dictionary is updated in-place.
-
-        Returns
-        -------
-        Updated detection dictionary.
+        Implemented in Part 2.
         """
 
-        track_id = detection["track_id"]
-
-        keypoints = detection["keypoints"]
-
-        nose = keypoints.get("nose")
-
-        left_ear = keypoints.get("left_ear")
-        right_ear = keypoints.get("right_ear")
-
-        left_shoulder = keypoints.get("left_shoulder")
-        right_shoulder = keypoints.get("right_shoulder")
-
-        # ------------------------------------------
-        # Validate required keypoints
-        # ------------------------------------------
-
-        if (
-            not self._valid(nose)
-            or not self._valid(left_shoulder)
-            or not self._valid(right_shoulder)
-        ):
-
-            orientation = self.UNKNOWN
-
-            detection["orientation"] = orientation
-            detection["orientation_confidence"] = 0.0
-
-            return detection
-
-        # ------------------------------------------
-        # Shoulder Geometry
-        # ------------------------------------------
-
-        shoulder_center = self._midpoint(
-            left_shoulder,
-            right_shoulder,
+        raise NotImplementedError(
+            "Implemented in Part 2."
         )
 
-        shoulder_width = self._distance(
-            left_shoulder,
-            right_shoulder,
-        )
-
-        if shoulder_width < 5:
-
-            orientation = self.UNKNOWN
-
-            detection["orientation"] = orientation
-            detection["orientation_confidence"] = 0.0
-
-            return detection
-
-        # ------------------------------------------
-        # Nose Position
-        # ------------------------------------------
-
-        nose_dx = (
-            nose[0] - shoulder_center[0]
-        ) / shoulder_width
-
-        nose_dy = (
-            nose[1] - shoulder_center[1]
-        ) / shoulder_width
-
-        # ------------------------------------------
-        # Ear Visibility
-        # ------------------------------------------
-
-        left_visible = self._valid(left_ear)
-        right_visible = self._valid(right_ear)
-
-        # ------------------------------------------
-        # Decision Logic
-        # ------------------------------------------
-
-        orientation = self.FORWARD
-        confidence = 0.70
-
-        # Looking Down
-
-        if nose_dy > self.down_ratio:
-
-            orientation = self.DOWN
-            confidence = 0.95
-
-        else:
-
-            score = 0
-
-            # ----------------------------------
-            # Nose relative to shoulders
-            # ----------------------------------
-
-            if nose_dx < -self.nose_offset_ratio:
-                score -= 2
-
-            elif nose_dx > self.nose_offset_ratio:
-                score += 2
-
-            # ----------------------------------
-            # Ear geometry
-            # ----------------------------------
-
-            if left_visible and right_visible:
-
-                left_distance = self._distance(
-                    nose,
-                    left_ear,
-                )
-
-                right_distance = self._distance(
-                    nose,
-                    right_ear,
-                )
-
-                diff = (
-                    left_distance - right_distance
-                ) / shoulder_width
-
-                if diff > 0.08:
-                    score += 1
-
-                elif diff < -0.08:
-                    score -= 1
-
-            elif left_visible and not right_visible:
-
-                score += 2
-
-            elif right_visible and not left_visible:
-
-                score -= 2
-
-            # ----------------------------------
-            # Final Decision
-            # ----------------------------------
-
-            if score <= -2:
-
-                orientation = self.LEFT
-                confidence = 0.92
-
-            elif score >= 2:
-
-                orientation = self.RIGHT
-                confidence = 0.92
-
-            else:
-
-                orientation = self.FORWARD
-                confidence = 0.88
-                # ------------------------------------------
-                # Temporal Smoothing
-                # ------------------------------------------
-
-                smoothed = self._update_history(
-                    track_id,
-                    orientation,
-                )
-
-                detection["orientation"] = smoothed
-                detection["orientation_confidence"] = confidence
-
-                return detection
-
-    # -------------------------------------------------
+    # ----------------------------------------------------------
+    # Batch Processing
+    # ----------------------------------------------------------
 
     def estimate_all(
         self,
         detections: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """
-        Estimate orientation for every tracked student.
+        Estimate orientation for every detection.
         """
+
+        output: list[dict[str, Any]] = []
 
         for detection in detections:
 
-            self.estimate(
-                detection,
+            output.append(
+                self.estimate(
+                    detection
+                )
             )
 
-        return detections
-    # -------------------------------------------------
+        return output
+
+    # ----------------------------------------------------------
+    # Visualization
+    # ----------------------------------------------------------
 
     def visualize(
         self,
-        frame: np.ndarray,
-        detections: list[dict[str, Any]],
-    ) -> np.ndarray:
+        frame,
+        detections,
+    ):
         """
-        Draw estimated orientation.
+        Implemented in Part 3.
         """
+
+        raise NotImplementedError(
+            "Implemented in Part 3."
+        )
+        # ----------------------------------------------------------
+    # Single Detection
+    # ----------------------------------------------------------
+
+    def estimate(
+        self,
+        detection: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Estimate head orientation for a single detection.
+        """
+
+        points = self._get_points(detection)
+
+        nose = points["nose"]
+
+        left_eye = points["left_eye"]
+        right_eye = points["right_eye"]
+
+        left_ear = points["left_ear"]
+        right_ear = points["right_ear"]
+
+        left_shoulder = points["left_shoulder"]
+        right_shoulder = points["right_shoulder"]
+
+        orientation = self.UNKNOWN
+        confidence = 0.0
+        final_score = 0.0
+
+        # ------------------------------------------
+        # Shoulders are mandatory
+        # ------------------------------------------
+
+        if not (
+            self.valid(left_shoulder)
+            and self.valid(right_shoulder)
+        ):
+
+            detection["orientation"] = orientation
+            detection["orientation_confidence"] = confidence
+            detection["orientation_score"] = final_score
+
+            return detection
+
+        shoulder_center = self.midpoint(
+            left_shoulder,
+            right_shoulder,
+        )
+
+        shoulder_width = self.distance(
+            left_shoulder,
+            right_shoulder,
+        )
+
+        if shoulder_width < 5:
+
+            detection["orientation"] = orientation
+            detection["orientation_confidence"] = confidence
+            detection["orientation_score"] = final_score
+
+            return detection
+
+        score = 0.0
+        weight = 0.0
+
+        body_score = 0.0
+        eye_score = 0.0
+        ear_score = 0.0
+
+        # ======================================================
+        # BODY SCORE
+        # ======================================================
+
+        if self.valid(nose):
+
+            nose_dx = (
+                nose[0] - shoulder_center[0]
+            ) / shoulder_width
+
+            body_score = self.clamp(
+                nose_dx * 2.5,
+                -1.0,
+                1.0,
+            )
+
+            score += body_score * 0.35
+            weight += 0.35
+
+        # ======================================================
+        # EYE SCORE
+        # ======================================================
+
+        if (
+            self.valid(left_eye)
+            and self.valid(right_eye)
+            and self.valid(nose)
+        ):
+
+            left_distance = self.distance(
+                nose,
+                left_eye,
+            )
+
+            right_distance = self.distance(
+                nose,
+                right_eye,
+            )
+
+            total = (
+                left_distance
+                + right_distance
+            )
+
+            if total > 0:
+
+                eye_score = (
+                    right_distance
+                    - left_distance
+                ) / total
+
+                eye_score = self.clamp(
+                    eye_score * 2.0,
+                    -1.0,
+                    1.0,
+                )
+
+                score += eye_score * 0.40
+                weight += 0.40
+
+        # ======================================================
+        # EAR SCORE
+        # ======================================================
+
+        if (
+            self.valid(left_ear)
+            and self.valid(right_ear)
+            and self.valid(nose)
+        ):
+
+            left_distance = self.distance(
+                nose,
+                left_ear,
+            )
+
+            right_distance = self.distance(
+                nose,
+                right_ear,
+            )
+
+            total = (
+                left_distance
+                + right_distance
+            )
+
+            if total > 0:
+
+                ear_score = (
+                    right_distance
+                    - left_distance
+                ) / total
+
+                ear_score = self.clamp(
+                    ear_score * 2.0,
+                    -1.0,
+                    1.0,
+                )
+
+                score += ear_score * 0.25
+                weight += 0.25
+
+        elif self.valid(left_ear):
+
+            ear_score = -0.50
+
+            score += ear_score * 0.25
+            weight += 0.25
+
+        elif self.valid(right_ear):
+
+            ear_score = 0.50
+
+            score += ear_score * 0.25
+            weight += 0.25
+
+        # ======================================================
+        # DOWN DETECTION
+        # ======================================================
+
+        if (
+            self.valid(nose)
+            and self.valid(left_eye)
+            and self.valid(right_eye)
+        ):
+
+            eye_center = self.midpoint(
+                left_eye,
+                right_eye,
+            )
+
+            dy = (
+                nose[1]
+                - eye_center[1]
+            ) / shoulder_width
+
+            if dy > 0.22:
+
+                confidence = min(
+                    dy * 2.0,
+                    1.0,
+                )
+
+                orientation = self.smooth(
+                    detection["track_id"],
+                    self.DOWN,
+                )
+
+                detection["orientation"] = orientation
+                detection["orientation_confidence"] = confidence
+                detection["orientation_score"] = 0.0
+
+                detection["debug"] = {
+                    "body": round(body_score, 3),
+                    "eye": round(eye_score, 3),
+                    "ear": round(ear_score, 3),
+                    "score": 0.0,
+                }
+
+                return detection
+
+        # ======================================================
+        # FINAL SCORE
+        # ======================================================
+
+        if weight > 0:
+
+            final_score = score / weight
+
+        if final_score <= -0.28:
+
+            orientation = self.LEFT
+
+        elif final_score >= 0.28:
+
+            orientation = self.RIGHT
+
+        else:
+
+            orientation = self.FORWARD
+
+        confidence = min(
+            abs(final_score),
+            1.0,
+        )
+
+        orientation = self.smooth(
+            detection["track_id"],
+            orientation,
+        )
+
+        detection["orientation"] = orientation
+        detection["orientation_confidence"] = confidence
+        detection["orientation_score"] = final_score
+
+        detection["debug"] = {
+            "body": round(body_score, 3),
+            "eye": round(eye_score, 3),
+            "ear": round(ear_score, 3),
+            "score": round(final_score, 3),
+        }
+
+        return detection
+        # ----------------------------------------------------------
+    # Visualization
+    # ----------------------------------------------------------
+
+    def visualize(
+        self,
+        frame,
+        detections,
+        show_debug: bool = True,
+    ):
+        """
+        Draw orientation labels and optional debug scores.
+        """
+
+        import cv2
 
         colors = {
             self.FORWARD: (0, 255, 0),
             self.LEFT: (255, 0, 0),
             self.RIGHT: (0, 165, 255),
             self.DOWN: (0, 0, 255),
-            self.UNKNOWN: (120, 120, 120),
+            self.UNKNOWN: (150, 150, 150),
         }
 
         for detection in detections:
@@ -400,19 +566,98 @@ class OrientationEstimator:
                 0.0,
             )
 
+            score = detection.get(
+                "orientation_score",
+                0.0,
+            )
+
             color = colors.get(
                 orientation,
                 (255, 255, 255),
             )
 
+            # ----------------------------------
+            # Orientation Label
+            # ----------------------------------
+
             cv2.putText(
                 frame,
                 f"{orientation} ({confidence:.2f})",
-                (x1, y1 - 90),
+                (x1, max(30, y1 - 90)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                0.65,
                 color,
                 2,
             )
+
+            # ----------------------------------
+            # Final Score
+            # ----------------------------------
+
+            cv2.putText(
+                frame,
+                f"Score: {score:.2f}",
+                (x1, max(50, y1 - 65)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2,
+            )
+
+            # ----------------------------------
+            # Debug Overlay
+            # ----------------------------------
+
+            if show_debug:
+
+                debug = detection.get(
+                    "debug",
+                    {},
+                )
+
+                body = debug.get(
+                    "body",
+                    0.0,
+                )
+
+                eye = debug.get(
+                    "eye",
+                    0.0,
+                )
+
+                ear = debug.get(
+                    "ear",
+                    0.0,
+                )
+
+                cv2.putText(
+                    frame,
+                    f"B:{body:.2f}",
+                    (x1, max(70, y1 - 45)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    1,
+                )
+
+                cv2.putText(
+                    frame,
+                    f"E:{eye:.2f}",
+                    (x1, max(90, y1 - 25)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    1,
+                )
+
+                cv2.putText(
+                    frame,
+                    f"A:{ear:.2f}",
+                    (x1, max(110, y1 - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    1,
+                )
 
         return frame

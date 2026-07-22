@@ -17,3 +17,7 @@ groq==0.11.0
 
 lap==0.5.12
 tqdm==4.66.5
+
+SQLAlchemy==2.0.41
+psycopg[binary]==3.2.9
+alembic==1.16.4

@@ -138,6 +138,14 @@ class PoseTracker:
                     keypoints,
                     self.NOSE,
                 ),
+                "left_eye": self._point(
+                    keypoints,
+                    self.LEFT_EYE,
+                ),
+                "right_eye": self._point(
+                    keypoints,
+                    self.RIGHT_EYE,
+                ),
 
                 "left_ear": self._point(
                     keypoints,
@@ -196,6 +204,8 @@ class PoseTracker:
             persist=True,
             tracker=self.tracker,
             conf=self.confidence,
+            imgsz=960,
+            iou=0.5,
             verbose=False,
         )
 
@@ -307,7 +317,9 @@ class PoseTracker:
             # -------------------------
 
             keypoint_colors = {
-                "nose": (0, 0, 255),            # Red
+                "nose": (0, 0, 255), # Red
+                "left_eye": (0,255,0),
+                "right_eye": (0,255,0),
                 "left_ear": (255, 0, 255),      # Magenta
                 "right_ear": (255, 255, 0),     # Cyan
                 "left_shoulder": (0, 255, 255), # Yellow
