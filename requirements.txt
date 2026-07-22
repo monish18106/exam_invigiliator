@@ -1,23 +1,62 @@
+# ==========================
+# AI / Computer Vision
+# ==========================
+torch==2.12.1
+torchvision==0.27.1
+torchaudio==2.11.0
+
+ultralytics==8.3.70
+ultralytics-thop==2.0.20
+
+mediapipe==0.10.21
 opencv-python==4.10.0.84
-ultralytics==8.3.0
-mediapipe==0.10.14
+opencv-contrib-python==4.11.0.86
 
-numpy==2.0.2
-scipy==1.14.1
-pandas==2.2.2
+numpy==1.26.4
+scipy==1.15.1
+scikit-learn==1.9.0
+river==0.25.0
+lapx==0.5.11
 
-python-dotenv==1.0.1
-loguru==0.7.2
+# ==========================
+# Backend
+# ==========================
+fastapi==0.115.6
+uvicorn==0.34.0
+starlette==0.41.3
 
-SQLAlchemy==2.0.36
+# ==========================
+# Dashboard
+# ==========================
+streamlit==1.42.0
+streamlit-autorefresh==1.0.1
 
-streamlit==1.39.0
+# ==========================
+# Database
+# ==========================
+SQLAlchemy==2.0.37
+alembic==1.18.5
+psycopg[binary]==3.3.4
 
-groq==0.11.0
+# ==========================
+# Configuration
+# ==========================
+pydantic==2.10.6
+python-dotenv==1.2.2
+PyYAML==6.0.2
 
-lap==0.5.12
-tqdm==4.66.5
+# ==========================
+# Networking
+# ==========================
+requests==2.32.3
+httpx==0.28.1
+python-multipart==0.0.20
+aiofiles==24.1.0
 
-SQLAlchemy==2.0.41
-psycopg[binary]==3.2.9
-alembic==1.16.4
+# ==========================
+# Utilities
+# ==========================
+loguru==0.7.3
+tqdm==4.68.3
+watchdog==6.0.0
+pandas==2.2.3
