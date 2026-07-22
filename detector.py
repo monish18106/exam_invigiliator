@@ -1,12 +1,25 @@
 """
 detector.py
 
-Phase 2 - Camera Validation
+Phase 5 - Head Pose Estimation Test
 
 Purpose
 -------
-Validate the threaded camera pipeline before
-introducing AI modules.
+Validate the complete camera + tracking + head pose pipeline.
+
+Pipeline
+--------
+Camera
+    ↓
+Frame Queue
+    ↓
+YOLOv8 Pose + ByteTrack
+    ↓
+Head Pose Estimation
+    ↓
+Visualization
+    ↓
+Display
 
 Press 'q' to quit.
 """
@@ -18,20 +31,24 @@ import time
 import cv2
 from loguru import logger
 
+from ai.orientation import OrientationEstimator
+from ai.tracker import PoseTracker
 from camera.cctv import Camera
 
 
 def main() -> None:
     """
-    Camera validation entry point.
+    Phase 5 entry point.
     """
 
     camera = Camera()
+    tracker = PoseTracker()
+    orientation = OrientationEstimator()
 
     try:
         camera.start()
 
-        logger.info("Starting live camera preview...")
+        logger.info("Starting head pose estimation...")
 
         previous_time = time.perf_counter()
 
@@ -42,6 +59,33 @@ def main() -> None:
             if frame is None:
                 continue
 
+            # -------------------------------------------------
+            # Tracking
+            # -------------------------------------------------
+
+            detections = tracker.track(frame)
+
+            # -------------------------------------------------
+            # Head Pose Estimation
+            # -------------------------------------------------
+
+            detections = orientation.estimate_all(detections)
+
+            # -------------------------------------------------
+            # Visualization
+            # -------------------------------------------------
+
+            frame = tracker.visualize(
+                frame,
+                detections,
+            )
+
+            frame = orientation.visualize(frame, detections)
+
+            # -------------------------------------------------
+            # FPS
+            # -------------------------------------------------
+
             current_time = time.perf_counter()
 
             fps = 1.0 / max(
@@ -51,7 +95,15 @@ def main() -> None:
 
             previous_time = current_time
 
+            # -------------------------------------------------
+            # Camera Information
+            # -------------------------------------------------
+
             width, height = camera.get_resolution()
+
+            # -------------------------------------------------
+            # Overlay
+            # -------------------------------------------------
 
             cv2.putText(
                 frame,
@@ -75,13 +127,27 @@ def main() -> None:
 
             cv2.putText(
                 frame,
-                "Phase 2 : Camera Test",
+                f"Persons : {len(detections)}",
                 (20, 105),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 255),
+                2,
+            )
+
+            cv2.putText(
+                frame,
+                "Phase 5 : Head Pose Estimation",
+                (20, 140),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
                 (255, 255, 0),
                 2,
             )
+
+            # -------------------------------------------------
+            # Display
+            # -------------------------------------------------
 
             cv2.imshow(
                 "AI Assisted Exam Proctoring",
@@ -91,18 +157,20 @@ def main() -> None:
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord("q"):
+                logger.info("Exit requested by user.")
                 break
 
-    except Exception as exc:
-        logger.exception(exc)
+    except Exception:
+        logger.exception("Head pose estimation failed.")
 
     finally:
+
 
         camera.stop()
 
         cv2.destroyAllWindows()
 
-        logger.info("Camera validation finished.")
+        logger.info("Head pose estimation finished.")
 
 
 if __name__ == "__main__":
